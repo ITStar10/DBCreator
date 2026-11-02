@@ -1,0 +1,5 @@
+[
+  {"id": 1, "name": "Alice", "email": "alice@example.com", "age": 31, "active": true, "score": 88.5, "tags": ["admin", "beta"], "address": {"city": "Bogotá", "zip": "110111"}},
+  {"id": 2, "name": "Bob", "email": "bob@example.com", "age": 27, "active": false, "score": 92, "tags": [], "address": {"city": "Medellín", "zip": "050001"}},
+  {"id": 3, "name": "Carla", "email": null, "age": 45, "active": true, "score": 75.25, "tags": ["beta"], "address": null}
+]

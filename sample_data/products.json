@@ -1,0 +1,5 @@
+[
+  {"sku": "A-100", "product name": "Keyboard", "price": 49.99, "stock": 120, "category": "peripherals"},
+  {"sku": "A-101", "product name": "Mouse", "price": 19.5, "stock": 300, "category": "peripherals"},
+  {"sku": "B-200", "product name": "Monitor 27\"", "price": 289, "stock": 15, "category": "displays"}
+]

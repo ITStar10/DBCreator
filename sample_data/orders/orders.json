@@ -1,0 +1,4 @@
+[
+  {"order_id": "ORD-1", "user_id": 1, "items": [{"sku": "A-100", "qty": 1}], "total": 49.99, "created_at": "2026-10-01T10:00:00Z"},
+  {"order_id": "ORD-2", "user_id": 2, "items": [{"sku": "A-101", "qty": 2}, {"sku": "B-200", "qty": 1}], "total": 328.0, "created_at": "2026-10-02T15:30:00Z"}
+]

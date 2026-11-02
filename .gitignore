@@ -1,0 +1,4 @@
+*.db
+*.report.json
+*.schema.sql
+__pycache__/
