@@ -2,7 +2,7 @@
 
 Analyses a folder of JSON files and builds a **SQLite** database from them, ready to be used by a back-end server.
 
-Each `.json` file must contain an **array of objects** (records). Every file becomes one table.
+Each `.json` file must contain an **array of objects** (records). By default the records of **all files are merged into one table**, with a `source_file` column telling which file each row came from. Use `--per-file` to get one table per file instead.
 
 Files that are not strict JSON are also accepted, as long as each object is valid. That covers missing commas between objects (`[ {...} {...} ]`), trailing commas, JSON Lines (one object per line) and objects with no surrounding `[ ]`. Such files are imported with a warning in the report.
 
@@ -13,8 +13,8 @@ Pure Python 3.10+ standard library — no dependencies to install.
 ```bash
 cd DBCreator
 
-# Build app.db from every *.json file in the folder
-python main.py /path/to/json/folder -o app.db
+# Merge every *.json file in the folder into one table "records" in app.db
+python main.py /path/to/json/folder -o app.db -t records
 
 # Or run it as a module; with no folder argument it asks for the path
 python -m dbcreator
@@ -24,6 +24,8 @@ python -m dbcreator
 | --- | --- |
 | `folder` | Folder with the JSON files. Prompted for if omitted. |
 | `-o, --output` | Database file to create. Default: `<folder name>.db` in the current directory. |
+| `-t, --table NAME` | Name of the table the records are merged into. Default: the folder name. |
+| `--per-file` | One table per JSON file instead of one merged table. |
 | `-r, --recursive` | Also scan sub-folders. |
 | `--if-exists fail\|replace\|append` | What to do when a table already exists (default `fail`). `append` adds rows and any new columns. |
 | `--dry-run` | Only analyse and print the report; write nothing. |
@@ -33,7 +35,7 @@ python -m dbcreator
 Try it with the bundled examples:
 
 ```bash
-python main.py sample_data -r -o app.db
+python main.py sample_data -r -o app.db --per-file   # users, products, orders tables
 ```
 
 ## Output
@@ -48,7 +50,7 @@ The analysis is also printed to the terminal.
 
 ## How the JSON is mapped
 
-**Tables** are named after the file (`Order Items.json` → `order_items`). With `--recursive`, files that share a name get their folder path as prefix (`a/items.json` → `a_items`).
+**Tables**: by default one table (named by `-t`, or after the folder) holds the records of every file, plus a `source_file` column (indexed) with the file's path relative to the folder, e.g. `1985-140.json`. With `--per-file`, each table is named after its file (`Order Items.json` → `order_items`); with `--recursive`, files that share a name get their folder path as prefix (`a/items.json` → `a_items`).
 
 **Columns** are the union of keys across all records, converted to snake_case (`product name` → `product_name`, `firstName` → `first_name`). A record missing a key gets `NULL` there.
 
@@ -63,11 +65,13 @@ The analysis is also printed to the terminal.
 | objects / arrays | `TEXT` | JSON string — query with SQLite's `json_extract()` |
 | a mix of the above | `TEXT` | string (reported as a warning) |
 
-**Primary key**: if the records have an `id` key that is never null, unique, and an integer or string, it becomes the primary key. Otherwise an auto-increment `id` column is added (or `row_id` when an unusable `id` already exists).
+**Primary key**: if the records have an `id` key that is never null, unique across the table (all files, when merged), and an integer or string, it becomes the primary key. Otherwise an auto-increment `id` column is added (or `row_id` when an unusable `id` already exists).
 
 **Metadata**: the table `_dbcreator_meta` records, for each table, its source file, row count, primary key, column types and import time.
 
-Files that are not valid JSON, not an array of objects, or an empty array are skipped and reported; the rest of the folder is still imported. Each file is loaded in its own transaction, so a file that fails (for example duplicate primary keys on `append`) leaves its table unchanged.
+Files that are not valid JSON or not an array of objects are skipped and reported; files with an empty array are counted and listed in the report. The rest of the folder is still imported. The whole build is committed once at the end (fast even on slow or USB drives), and each table is loaded in a savepoint, so a table that fails (for example duplicate primary keys on `append`) is left unchanged while the others are saved. Interrupting with Ctrl+C writes nothing.
+
+While reading, a `Reading files: n/total` counter is shown in the terminal.
 
 ## Using the database in a back end
 

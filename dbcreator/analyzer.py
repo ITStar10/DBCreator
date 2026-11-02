@@ -123,17 +123,30 @@ class TableAnalysis:
     columns: list[ColumnInfo]
     primary_key: str | None = None      # name of a JSON-derived column used as PK
     surrogate_key: str | None = None    # name of the auto-increment column, if one was added
+    source_column: str | None = None    # column holding each row's source file (merged tables)
     warnings: list[str] = field(default_factory=list)
 
     @property
     def key_column(self) -> str:
         return self.primary_key or self.surrogate_key or ""
 
+    @property
+    def insert_columns(self) -> list[str]:
+        """Columns written by `rows()`, in order."""
+        prefix = [self.source_column] if self.source_column else []
+        return prefix + [c.name for c in self.columns]
+
     def column_by_key(self) -> dict[str, ColumnInfo]:
         return {c.key: c for c in self.columns}
 
-    def rows(self, records: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
-        return [tuple(c.to_db_value(rec.get(c.key)) for c in self.columns) for rec in records]
+    def rows(self, records: list[dict[str, Any]], sources: list[str] | None = None) -> list[tuple[Any, ...]]:
+        """Convert records to insert tuples; `sources` is required when the table has a source column."""
+        values = [tuple(c.to_db_value(rec.get(c.key)) for c in self.columns) for rec in records]
+        if self.source_column:
+            if sources is None or len(sources) != len(records):
+                raise ValueError("one source per record is required for a table with a source column")
+            return [(src, *row) for src, row in zip(sources, values)]
+        return values
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -142,6 +155,7 @@ class TableAnalysis:
             "record_count": self.record_count,
             "primary_key": self.key_column,
             "primary_key_generated": self.surrogate_key is not None,
+            "source_column": self.source_column,
             "columns": [c.to_dict() for c in self.columns],
             "warnings": self.warnings,
         }
@@ -233,8 +247,18 @@ def load_records(path: str | Path, notes: list[str] | None = None) -> list[dict[
     return data
 
 
-def analyze_records(records: list[dict[str, Any]], table_name: str, source_file: str = "") -> TableAnalysis:
-    """Infer columns, types and primary key for a list of JSON objects."""
+def analyze_records(
+    records: list[dict[str, Any]],
+    table_name: str,
+    source_file: str = "",
+    *,
+    source_column: bool = False,
+) -> TableAnalysis:
+    """Infer columns, types and primary key for a list of JSON objects.
+
+    With `source_column=True` an extra `source_file` column is planned, used when
+    records from several files are merged into one table.
+    """
     columns: dict[str, ColumnInfo] = {}
     taken: set[str] = set()
     warnings: list[str] = []
@@ -274,6 +298,9 @@ def analyze_records(records: list[dict[str, Any]], table_name: str, source_file:
         warnings=warnings,
     )
     _choose_primary_key(analysis)
+    if source_column:
+        taken = {c.name for c in analysis.columns} | {analysis.surrogate_key or ""}
+        analysis.source_column = unique_name("source_file", taken)
     return analysis
 
 

@@ -130,7 +130,8 @@ class BuildTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(sorted(t.table_name for t in result.tables), ["order_items", "users"])
-        self.assertEqual(sorted(f for f, _ in result.skipped), ["broken.json", "empty.json", "single.json"])
+        self.assertEqual(sorted(f for f, _ in result.skipped), ["broken.json", "single.json"])
+        self.assertEqual(result.empty, ["empty.json"])
 
         rows = self.query('SELECT id, name, active, meta, score FROM users ORDER BY id')
         self.assertEqual(rows, [(1, "A", 1, '{"k": 1}', 1.0), (2, "B", 0, None, 2.5)])
@@ -170,6 +171,51 @@ class BuildTests(unittest.TestCase):
         write_json(self.data, "b/items.json", [{"x": 2}])
         result = build_database(self.data, self.db, recursive=True)
         self.assertEqual(sorted(t.table_name for t in result.tables), ["a_items", "b_items"])
+
+    def test_merge_into_one_table(self):
+        write_json(self.data, "1985-140.json", [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}])
+        write_json(self.data, "1986-127.json", [{"id": 1, "name": "c", "extra": True}])
+        write_json(self.data, "1987-128.json", [])
+        (self.data / "1988-1.json").write_text('[{"id": 9} {"id": 10}]', encoding="utf-8")
+        (self.data / "broken.json").write_text("[{", encoding="utf-8")
+
+        result = build_database(self.data, self.db, table="records")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.files_read, 4)
+        self.assertEqual(result.empty, ["1987-128.json"])
+        self.assertEqual([f for f, _ in result.skipped], ["broken.json"])
+        (analysis,) = result.tables
+        # ids repeat across files, so a surrogate key is added and `id` is kept as a column
+        self.assertEqual((analysis.surrogate_key, analysis.source_column), ("row_id", "source_file"))
+        self.assertTrue(any("read leniently: 1988-1.json" in w for w in analysis.warnings))
+        rows = self.query("SELECT row_id, source_file, id, name, extra FROM records ORDER BY row_id")
+        self.assertEqual(rows, [
+            (1, "1985-140.json", 1, "a", None),
+            (2, "1985-140.json", 2, "b", None),
+            (3, "1986-127.json", 1, "c", 1),
+            (4, "1988-1.json", 9, None, None),
+            (5, "1988-1.json", 10, None, None),
+        ])
+        indexes = [r[0] for r in self.query("SELECT name FROM sqlite_master WHERE type = 'index'")]
+        self.assertIn("idx_records_source_file", indexes)
+
+    def test_merge_append_adds_rows(self):
+        write_json(self.data, "a.json", [{"v": 1}])
+        build_database(self.data, self.db, table="t")
+        result = build_database(self.data, self.db, table="t", if_exists="append")
+        self.assertTrue(result.ok)
+        self.assertEqual(self.query("SELECT source_file, v FROM t"), [("a.json", 1), ("a.json", 1)])
+
+    def test_failed_table_does_not_undo_others(self):
+        write_json(self.data, "a.json", [{"id": 1}])
+        write_json(self.data, "b.json", [{"id": 1}])
+        build_database(self.data, self.db)
+        write_json(self.data, "c.json", [{"id": 1}])
+        result = build_database(self.data, self.db, if_exists="append")  # a, b clash on id; c is new
+        self.assertEqual(sorted(f for f, _ in result.failed), ["a.json", "b.json"])
+        self.assertEqual(self.query("SELECT COUNT(*) FROM c"), [(1,)])
+        self.assertEqual(self.query("SELECT COUNT(*) FROM a"), [(1,)])
 
     def test_uppercase_extension(self):
         write_json(self.data, "Upper.JSON", [{"x": 1}])

@@ -21,6 +21,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-o", "--output",
         help="path of the SQLite database to create (default: <folder name>.db in the current directory)",
     )
+    parser.add_argument(
+        "-t", "--table",
+        help="name of the table all records are merged into (default: the folder name)",
+    )
+    parser.add_argument(
+        "--per-file", action="store_true",
+        help="create one table per JSON file instead of merging everything into one table",
+    )
     parser.add_argument("-r", "--recursive", action="store_true", help="also scan sub-folders")
     parser.add_argument(
         "--if-exists", choices=("fail", "replace", "append"), default="fail",
@@ -46,11 +54,16 @@ def prompt_folder() -> str:
         print(f"  '{value}' is not a folder, try again.")
 
 
+def show_progress(done: int, total: int) -> None:
+    print(f"\rReading files: {done}/{total}", end="\n" if done == total else "", file=sys.stderr, flush=True)
+
+
 def print_report(result: BuildResult) -> None:
     for table in result.tables:
         pk = table.key_column + (" (auto)" if table.surrogate_key else "")
         print(f"\nTable '{table.table_name}'  <- {table.source_file}")
-        print(f"  records: {table.record_count}   primary key: {pk}")
+        print(f"  records: {table.record_count}   primary key: {pk}", end="")
+        print(f"   source file column: {table.source_column}" if table.source_column else "")
         rows = [("column", "json key", "type", "sqlite", "nulls", "distinct")]
         rows += [
             (c.name, c.key, c.logical_type, c.sqlite_type, str(c.null_count), str(c.distinct_count))
@@ -64,6 +77,9 @@ def print_report(result: BuildResult) -> None:
         for warning in table.warnings:
             print(f"  ! {warning}")
 
+    if result.empty:
+        shown = ", ".join(result.empty[:5]) + (", ..." if len(result.empty) > 5 else "")
+        print(f"\n{len(result.empty)} file(s) contain an empty array (no records): {shown}")
     for file, reason in result.skipped:
         print(f"\nSkipped {file}: {reason}")
     for file, reason in result.failed:
@@ -77,24 +93,36 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)s: %(message)s",
     )
 
+    if args.per_file and args.table:
+        print("Error: --table and --per-file cannot be used together", file=sys.stderr)
+        return 2
+
     folder = args.folder or prompt_folder()
+    folder_name = Path(folder).expanduser().resolve().name or "database"
     output = args.output
     if not output and not args.dry_run:
-        output = f"{Path(folder).expanduser().resolve().name or 'database'}.db"
+        output = f"{folder_name}.db"
+    table = None if args.per_file else (args.table or folder_name)
 
     try:
         result = build_database(
             folder,
             output,
+            table=table,
             recursive=args.recursive,
             if_exists=args.if_exists,
             write_report=not args.no_report,
             dry_run=args.dry_run,
+            progress=show_progress if sys.stderr.isatty() else None,
         )
     except (NotADirectoryError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("\nInterrupted, nothing was written to the database.", file=sys.stderr)
+        return 130
 
+    print(f"Read {result.files_read} file(s).")
     print_report(result)
 
     if not result.tables and not result.failed:

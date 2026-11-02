@@ -32,10 +32,13 @@ def sanitize_identifier(raw: str, fallback: str = "col") -> str:
 
 
 def unique_name(name: str, taken: set[str]) -> str:
-    """Return `name`, or `name_2`, `name_3`... so it does not clash (case-insensitively) with `taken`."""
-    lowered = {t.lower() for t in taken}
+    """Return `name`, or `name_2`, `name_3`... so it does not clash with `taken`.
+
+    Names produced by `sanitize_identifier` are lowercase, so a plain membership test
+    is enough to avoid SQLite's case-insensitive identifier clashes.
+    """
     candidate, n = name, 2
-    while candidate.lower() in lowered:
+    while candidate in taken:
         candidate = f"{name}_{n}"
         n += 1
     return candidate
@@ -50,6 +53,8 @@ def create_table_sql(table: "TableAnalysis") -> str:
     lines: list[str] = []
     if table.surrogate_key:
         lines.append(f"{quote(table.surrogate_key)} INTEGER PRIMARY KEY AUTOINCREMENT")
+    if table.source_column:
+        lines.append(f"{quote(table.source_column)} TEXT NOT NULL")
     for col in table.columns:
         definition = f"{quote(col.name)} {col.sqlite_type}"
         if col.name == table.primary_key:
