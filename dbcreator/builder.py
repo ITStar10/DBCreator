@@ -50,8 +50,9 @@ class BuildResult:
 
 
 def discover_json_files(folder: Path, recursive: bool = False) -> list[Path]:
-    pattern = "**/*.json" if recursive else "*.json"
-    return sorted(p for p in folder.glob(pattern) if p.is_file())
+    """Find .json files (extension matched case-insensitively, so .JSON works too)."""
+    candidates = folder.rglob("*") if recursive else folder.glob("*")
+    return sorted(p for p in candidates if p.suffix.lower() == ".json" and p.is_file())
 
 
 def assign_table_names(files: list[Path], folder: Path) -> dict[Path, str]:
@@ -97,7 +98,14 @@ def build_database(
     result = BuildResult(database=None if dry_run else db_path)
     files = discover_json_files(folder, recursive)
     if not files:
-        log.warning("No .json files found in %s", folder)
+        nested = 0 if recursive else len(discover_json_files(folder, recursive=True))
+        if nested:
+            log.warning(
+                "No .json files directly in %s, but %d found in sub-folders; use -r/--recursive",
+                folder, nested,
+            )
+        else:
+            log.warning("No .json files found in %s", folder)
         return result
 
     names = assign_table_names(files, folder)
@@ -105,13 +113,15 @@ def build_database(
 
     for path in files:
         rel = str(path.relative_to(folder))
+        notes: list[str] = []
         try:
-            records = load_records(path)
+            records = load_records(path, notes)
         except (JSONFileError, OSError) as exc:
             log.warning("Skipping %s: %s", rel, exc)
             result.skipped.append((rel, str(exc)))
             continue
         analysis = analyze_records(records, names[path], rel)
+        analysis.warnings[:0] = notes
         if not analysis.columns:
             reason = "array is empty, no columns to infer"
             log.warning("Skipping %s: %s", rel, reason)

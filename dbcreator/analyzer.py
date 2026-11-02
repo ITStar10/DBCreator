@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -146,16 +147,83 @@ class TableAnalysis:
         }
 
 
-def load_records(path: str | Path) -> list[dict[str, Any]]:
-    """Read a JSON file that must contain an array of objects."""
-    path = Path(path)
+def parse_lenient(text: str) -> list[Any]:
+    """Parse a sequence of JSON values, optionally wrapped in [ ], with or without commas between them.
+
+    Accepts `[ {...} {...} ]` (missing commas), trailing commas, JSON Lines and bare
+    concatenated objects. Raises json.JSONDecodeError when a value itself is malformed.
+    """
+    decoder = json.JSONDecoder()
+    items: list[Any] = []
+    length = len(text)
+
+    def skip(pos: int, chars: str) -> int:
+        while pos < length and (text[pos].isspace() or text[pos] in chars):
+            pos += 1
+        return pos
+
+    pos = skip(0, "")
+    in_array = pos < length and text[pos] == "["
+    if in_array:
+        pos += 1
+
+    while True:
+        pos = skip(pos, ",")
+        if pos >= length:
+            if in_array:
+                raise json.JSONDecodeError("missing closing ']'", text, pos)
+            break
+        if in_array and text[pos] == "]":
+            pos = skip(pos + 1, "")
+            if pos < length:
+                raise json.JSONDecodeError("unexpected data after closing ']'", text, pos)
+            break
+        value, pos = decoder.raw_decode(text, pos)
+        items.append(value)
+    return items
+
+
+def _read_text(path: Path) -> str:
+    """Decode a JSON file as UTF-8, or UTF-16/UTF-32 (as saved by some Windows tools)."""
+    raw = path.read_bytes()
+    if raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        encoding = "utf-32"
+    elif raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encoding = "utf-16"
+    elif len(raw) >= 2 and raw[0] == 0 and raw[1] != 0:  # BOM-less UTF-16: first char is ASCII '[' or '{'
+        encoding = "utf-16-be"
+    elif len(raw) >= 2 and raw[0] != 0 and raw[1] == 0:
+        encoding = "utf-16-le"
+    else:
+        encoding = "utf-8-sig"
     try:
-        with path.open("r", encoding="utf-8-sig") as fh:
-            data = json.load(fh)
-    except json.JSONDecodeError as exc:
-        raise JSONFileError(f"invalid JSON ({exc.msg} at line {exc.lineno}, column {exc.colno})") from exc
+        return raw.decode(encoding)
     except UnicodeDecodeError as exc:
-        raise JSONFileError(f"file is not valid UTF-8 ({exc.reason})") from exc
+        raise JSONFileError(f"file is not valid {encoding.upper()} ({exc.reason} at byte {exc.start})") from exc
+
+
+def load_records(path: str | Path, notes: list[str] | None = None) -> list[dict[str, Any]]:
+    """Read a JSON file that must contain an array of objects.
+
+    Files that are not strict JSON only because of missing/extra commas between the
+    objects (or that are JSON Lines) are still accepted; a message is appended to `notes`.
+    """
+    text = _read_text(Path(path))
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as strict_exc:
+        try:
+            data = parse_lenient(text)
+        except json.JSONDecodeError as exc:
+            # Report the strict error: it points at the first real problem in the file.
+            err = exc if strict_exc.pos < exc.pos else strict_exc
+            raise JSONFileError(f"invalid JSON ({err.msg} at line {err.lineno}, column {err.colno})") from exc
+        if notes is not None:
+            notes.append(
+                f"file is not strict JSON ({strict_exc.msg} at line {strict_exc.lineno}); "
+                "objects were read individually"
+            )
 
     if not isinstance(data, list):
         raise JSONFileError(f"top-level value must be an array of objects, got {type(data).__name__}")

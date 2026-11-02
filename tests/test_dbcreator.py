@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 from dbcreator import analyze_records, build_database
-from dbcreator.analyzer import classify, resolve_type
+from dbcreator import load_records
+from dbcreator.analyzer import JSONFileError, classify, resolve_type
 from dbcreator.schema import META_TABLE, sanitize_identifier
 
 
@@ -62,6 +63,42 @@ class AnalyzeTests(unittest.TestCase):
     def test_colliding_column_names(self):
         a = analyze_records([{"user name": 1, "user_name": 2}], "t")
         self.assertEqual([c.name for c in a.columns], ["user_name", "user_name_2"])
+
+
+class LenientLoadTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "data.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def load(self, text):
+        self.path.write_text(text, encoding="utf-8")
+        notes = []
+        return load_records(self.path, notes), notes
+
+    def test_strict_json_has_no_notes(self):
+        self.assertEqual(self.load('[{"a": 1}, {"a": 2}]'), ([{"a": 1}, {"a": 2}], []))
+
+    def test_missing_commas_between_objects(self):
+        records, notes = self.load('[\n{ "key1": "v1", "key2":"v2"}\n{ "key1":"v3", "key2": "v4"}\n]\n')
+        self.assertEqual(records, [{"key1": "v1", "key2": "v2"}, {"key1": "v3", "key2": "v4"}])
+        self.assertEqual(len(notes), 1)
+
+    def test_trailing_comma_json_lines_and_bare_objects(self):
+        self.assertEqual(self.load('[{"a": 1}, {"a": 2},]')[0], [{"a": 1}, {"a": 2}])
+        self.assertEqual(self.load('{"a": 1}\n{"a": 2}\n')[0], [{"a": 1}, {"a": 2}])
+
+    def test_utf16_files(self):
+        for encoding in ("utf-16", "utf-16-le", "utf-8-sig"):
+            self.path.write_bytes('[{"name": "José"}]'.encode(encoding))
+            self.assertEqual(load_records(self.path), [{"name": "José"}], encoding)
+
+    def test_broken_object_still_rejected(self):
+        for text in ('[{"a": 1} {"a": }]', '[{"a": 1}', '[{"a": 1}] junk'):
+            with self.assertRaises(JSONFileError, msg=text):
+                self.load(text)
 
 
 class BuildTests(unittest.TestCase):
@@ -133,6 +170,11 @@ class BuildTests(unittest.TestCase):
         write_json(self.data, "b/items.json", [{"x": 2}])
         result = build_database(self.data, self.db, recursive=True)
         self.assertEqual(sorted(t.table_name for t in result.tables), ["a_items", "b_items"])
+
+    def test_uppercase_extension(self):
+        write_json(self.data, "Upper.JSON", [{"x": 1}])
+        result = build_database(self.data, self.db)
+        self.assertEqual([t.table_name for t in result.tables], ["upper"])
 
     def test_dry_run_writes_nothing(self):
         write_json(self.data, "t.json", [{"v": 1}])

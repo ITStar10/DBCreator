@@ -4,6 +4,8 @@ Analyses a folder of JSON files and builds a **SQLite** database from them, read
 
 Each `.json` file must contain an **array of objects** (records). Every file becomes one table.
 
+Files that are not strict JSON are also accepted, as long as each object is valid. That covers missing commas between objects (`[ {...} {...} ]`), trailing commas, JSON Lines (one object per line) and objects with no surrounding `[ ]`. Such files are imported with a warning in the report.
+
 Pure Python 3.10+ standard library — no dependencies to install.
 
 ## Usage
